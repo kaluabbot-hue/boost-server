@@ -1,4 +1,3 @@
-// FINAL SERVER.GO - DO NOT CHANGE AGAIN
 package main
 
 import (
@@ -9,13 +8,13 @@ import (
  "time"
 )
 
-func verifyPaystack(ref string, secret string) bool {
- if ref == "" { return false }
+func verifyPaystack(ref string, secret string) (bool, time.Time) {
+ if ref == "" { return false, time.Time{} }
  req, _ := http.NewRequest("GET", "https://api.paystack.co/transaction/verify/"+ref, nil)
  req.Header.Set("Authorization", "Bearer "+secret)
  client := &http.Client{Timeout: 10*time.Second}
  resp, err := client.Do(req)
- if err != nil { return false }
+ if err != nil { return false, time.Time{} }
  defer resp.Body.Close()
  body, _ := io.ReadAll(resp.Body)
  var data struct {
@@ -23,10 +22,16 @@ func verifyPaystack(ref string, secret string) bool {
   Data struct {
    Status string `json:"status"`
    Amount int `json:"amount"`
+   PaidAt string `json:"paid_at"`
   } `json:"data"`
  }
  json.Unmarshal(body, &data)
- return data.Status && data.Data.Status == "success" && data.Data.Amount >= 145000
+ if !(data.Status && data.Data.Status == "success" && data.Data.Amount >= 145000) {
+  return false, time.Time{}
+ }
+ t, _ := time.Parse(time.RFC3339, data.Data.PaidAt)
+ if t.IsZero() { t = time.Now() }
+ return true, t
 }
 
 func main() {
@@ -40,8 +45,11 @@ func main() {
   w.Header().Set("Content-Type", "text/plain")
   ref := r.URL.Query().Get("ref")
   if ref == "" { http.Error(w, "no ref", 400); return }
-  if secret != "" { if !verifyPaystack(ref, secret) { w.WriteHeader(403); w.Write([]byte("payment_not_verified")); return } }
-  w.Write([]byte(ref))
+  ok, paidAt := verifyPaystack(ref, secret)
+  if secret != "" && !ok { w.WriteHeader(403); w.Write([]byte("payment_not_verified")); return }
+  if paidAt.IsZero() { paidAt = time.Now() }
+  exp := paidAt.AddDate(0, 0, 30)
+  w.Write([]byte("REF="+ref+"\nEXP="+exp.Format("2006-01-02")+"\n"))
  })
  port := os.Getenv("PORT")
  if port == "" { port = "10000" }
